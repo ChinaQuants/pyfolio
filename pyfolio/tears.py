@@ -19,6 +19,7 @@ import warnings
 from . import timeseries
 from . import utils
 from . import pos
+from . import txn
 from . import plotting
 from .plotting import plotting_context
 
@@ -41,8 +42,10 @@ import seaborn as sns
 def create_full_tear_sheet(returns, positions=None, transactions=None,
                            benchmark_rets=None,
                            gross_lev=None,
+                           slippage=None,
                            live_start_date=None, bayesian=False,
-                           cone_std=1.0, set_context=True):
+                           sector_mappings=None,
+                           cone_std=(1.0, 1.5, 2.0), set_context=True):
     """
     Generate a number of tear sheets that are useful
     for analyzing a strategy's performance.
@@ -89,13 +92,21 @@ def create_full_tear_sheet(returns, positions=None, transactions=None,
             2009-12-07    0.999783
             2009-12-08    0.999880
             2009-12-09    1.000283
+    slippage : int/float, optional
+        Basis points of slippage to apply to returns before generating
+        tearsheet stats and plots.
+        If a value is provided, slippage parameter sweep
+        plots will be generated from the unadjusted returns.
+        Transactions and positions must also be passed.
+        - See txn.adjust_returns_for_slippage for more details.
     live_start_date : datetime, optional
         The point in time when the strategy began live trading,
         after its backtest period.
     bayesian: boolean, optional
         If True, causes the generation of a Bayesian tear sheet.
-    cone_std : float, optional
-        The standard deviation to use for the cone plots.
+    cone_std : float, or tuple, optional
+        If float, The standard deviation to use for the cone plots.
+        If tuple, Tuple of standard deviation values to use for the cone plots
          - The cone is a normal distribution with this standard deviation
              centered around a linear regression.
     set_context : boolean, optional
@@ -109,6 +120,14 @@ def create_full_tear_sheet(returns, positions=None, transactions=None,
     # If the strategy's history is longer than the benchmark's, limit strategy
     if returns.index[0] < benchmark_rets.index[0]:
         returns = returns[returns.index > benchmark_rets.index[0]]
+
+    if slippage is not None and transactions is not None:
+        turnover = txn.get_turnover(transactions, positions,
+                                    period=None, average=False)
+        unadjusted_returns = returns.copy()
+        returns = txn.adjust_returns_for_slippage(returns, turnover, slippage)
+    else:
+        unadjusted_returns = None
 
     create_returns_tear_sheet(
         returns,
@@ -129,6 +148,7 @@ def create_full_tear_sheet(returns, positions=None, transactions=None,
 
         if transactions is not None:
             create_txn_tear_sheet(returns, positions, transactions,
+                                  unadjusted_returns=unadjusted_returns,
                                   set_context=set_context)
 
     if bayesian:
@@ -140,7 +160,7 @@ def create_full_tear_sheet(returns, positions=None, transactions=None,
 
 @plotting_context
 def create_returns_tear_sheet(returns, live_start_date=None,
-                              cone_std=1.0,
+                              cone_std=(1.0, 1.5, 2.0),
                               benchmark_rets=None,
                               return_fig=False):
     """
@@ -162,8 +182,9 @@ def create_returns_tear_sheet(returns, live_start_date=None,
     live_start_date : datetime, optional
         The point in time when the strategy began live trading,
         after its backtest period.
-    cone_std : float, optional
-        The standard deviation to use for the cone plots.
+    cone_std : float, or tuple, optional
+        If float, The standard deviation to use for the cone plots.
+        If tuple, Tuple of standard deviation values to use for the cone plots
          - The cone is a normal distribution with this standard deviation
              centered around a linear regression.
     benchmark_rets : pd.Series, optional
@@ -230,7 +251,7 @@ def create_returns_tear_sheet(returns, live_start_date=None,
         returns,
         factor_returns=benchmark_rets,
         live_start_date=live_start_date,
-        cone_std=cone_std,
+        cone_std=None,
         volatility_match=True,
         ax=ax_rolling_returns_vol_match)
     ax_rolling_returns_vol_match.set_title(
@@ -301,7 +322,7 @@ def create_returns_tear_sheet(returns, live_start_date=None,
 @plotting_context
 def create_position_tear_sheet(returns, positions, gross_lev=None,
                                show_and_plot_top_pos=2,
-                               return_fig=False):
+                               return_fig=False, sector_mappings=None):
     """
     Generate a number of plots for analyzing a
     strategy's positions and holdings.
@@ -328,16 +349,21 @@ def create_position_tear_sheet(returns, positions, gross_lev=None,
         If True, returns the figure that was plotted on.
     set_context : boolean, optional
         If True, set default plotting style context.
+    sector_mapping: dict or pd.Series, optional
+        Security identifier to sector mapping.
+        Security ids as keys, sectors as values.
     """
 
-    fig = plt.figure(figsize=(14, 4 * 6))
-    gs = gridspec.GridSpec(4, 3, wspace=0.5, hspace=0.5)
+    vertical_sections = 5 if sector_mappings is not None else 4
+
+    fig = plt.figure(figsize=(14, vertical_sections * 6))
+    gs = gridspec.GridSpec(vertical_sections, 3, wspace=0.5, hspace=0.5)
     ax_gross_leverage = plt.subplot(gs[0, :])
     ax_exposures = plt.subplot(gs[1, :], sharex=ax_gross_leverage)
     ax_top_positions = plt.subplot(gs[2, :], sharex=ax_gross_leverage)
     ax_holdings = plt.subplot(gs[3, :], sharex=ax_gross_leverage)
 
-    positions_alloc = pos.get_portfolio_alloc(positions)
+    positions_alloc = pos.get_percent_alloc(positions)
 
     if gross_lev is not None:
         plotting.plot_gross_leverage(returns, gross_lev, ax=ax_gross_leverage)
@@ -352,14 +378,23 @@ def create_position_tear_sheet(returns, positions, gross_lev=None,
 
     plotting.plot_holdings(returns, positions_alloc, ax=ax_holdings)
 
+    if sector_mappings is not None:
+        sector_exposures = pos.get_sector_exposures(positions, sector_mappings)
+
+        sector_alloc = pos.get_percent_alloc(sector_exposures)
+        sector_alloc = sector_alloc.drop('cash', axis='columns')
+        ax_sector_alloc = plt.subplot(gs[4, :], sharex=ax_gross_leverage)
+        plotting.plot_sector_allocations(returns, sector_alloc,
+                                         ax=ax_sector_alloc)
+
     plt.show()
     if return_fig:
         return fig
 
 
 @plotting_context
-def create_txn_tear_sheet(
-        returns, positions, transactions, return_fig=False):
+def create_txn_tear_sheet(returns, positions, transactions,
+                          unadjusted_returns=None, return_fig=False):
     """
     Generate a number of plots for analyzing a strategy's transactions.
 
@@ -381,9 +416,10 @@ def create_txn_tear_sheet(
     set_context : boolean, optional
         If True, set default plotting style context.
     """
+    vertical_sections = 5 if unadjusted_returns is not None else 3
 
-    fig = plt.figure(figsize=(14, 3 * 6))
-    gs = gridspec.GridSpec(3, 3, wspace=0.5, hspace=0.5)
+    fig = plt.figure(figsize=(14, vertical_sections * 6))
+    gs = gridspec.GridSpec(vertical_sections, 3, wspace=0.5, hspace=0.5)
     ax_turnover = plt.subplot(gs[0, :])
     ax_daily_volume = plt.subplot(gs[1, :], sharex=ax_turnover)
     ax_turnover_hist = plt.subplot(gs[2, :])
@@ -401,6 +437,20 @@ def create_txn_tear_sheet(
                                           ax=ax_turnover_hist)
     except AttributeError:
         warnings.warn('Unable to generate turnover plot.', UserWarning)
+
+    if unadjusted_returns is not None:
+        ax_slippage_sweep = plt.subplot(gs[3, :])
+        plotting.plot_slippage_sweep(unadjusted_returns,
+                                     transactions,
+                                     positions,
+                                     ax=ax_slippage_sweep
+                                     )
+        ax_slippage_sensitivity = plt.subplot(gs[4, :])
+        plotting.plot_slippage_sensitivity(unadjusted_returns,
+                                           transactions,
+                                           positions,
+                                           ax=ax_slippage_sensitivity
+                                           )
 
     plt.show()
     if return_fig:
