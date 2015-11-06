@@ -610,7 +610,7 @@ def plot_rolling_returns(
 
     if factor_returns is not None:
         timeseries.cum_returns(factor_returns[df_cum_rets.index], 1.0).plot(
-            lw=2, color='gray', label='S&P500', alpha=0.60, ax=ax, **kwargs)
+            lw=2, color='gray', label=factor_returns.name, alpha=0.60, ax=ax, **kwargs)
     if live_start_date is not None:
         live_start_date = utils.get_utc_timestamp(live_start_date)
 
@@ -697,7 +697,7 @@ def plot_rolling_beta(returns, factor_returns, legend_loc='best',
     y_axis_formatter = FuncFormatter(utils.one_dec_places)
     ax.yaxis.set_major_formatter(FuncFormatter(y_axis_formatter))
 
-    ax.set_title("Rolling Portfolio Beta to S&P 500")
+    ax.set_title("Rolling Portfolio Beta to " + factor_returns.name)
     ax.set_ylabel('Beta')
     rb_1 = timeseries.rolling_beta(
         returns, factor_returns, rolling_window=APPROX_BDAYS_PER_MONTH * 6)
@@ -1344,3 +1344,58 @@ def show_worst_drawdown_periods(returns, top=5):
     drawdown_df['net drawdown in %'] = list(
         map(utils.round_two_dec_places, drawdown_df['net drawdown in %']))
     print(drawdown_df.sort('net drawdown in %', ascending=False))
+
+
+def plot_monthly_returns_timeseries(returns, ax=None, **kwargs):
+    """
+    Plots monthly returns as a timeseries.
+
+    Parameters
+    ----------
+    returns : pd.Series
+        Daily returns of the strategy, noncumulative.
+         - See full explanation in tears.create_full_tear_sheet.
+    ax : matplotlib.Axes, optional
+        Axes upon which to plot.
+    **kwargs, optional
+        Passed to seaborn plotting function.
+
+    Returns
+    -------
+    ax : matplotlib.Axes
+        The axes that were plotted on.
+    """
+
+    def cumulate_returns(x):
+        return timeseries.cum_returns(x)[-1]
+
+    if ax is None:
+        ax = plt.gca()
+
+    monthly_rets = returns.resample('M', how=cumulate_returns).to_period()
+
+    sns.barplot(x=monthly_rets.index,
+                y=monthly_rets.values,
+                color='steelblue')
+
+    locs, labels = plt.xticks()
+    plt.setp(labels, rotation=90)
+
+    # only show x-labels on year boundary
+    xticks_coord = []
+    xticks_label = []
+    count = 0
+    for i in monthly_rets.index:
+        if i.month == 1:
+            xticks_label.append(i)
+            xticks_coord.append(count)
+            # plot yearly boundary line
+            ax.axvline(count, color='gray', ls='--', alpha=0.3)
+
+        count += 1
+
+    ax.axhline(0.0, color='darkgray', ls='-')
+    ax.set_xticks(xticks_coord)
+    ax.set_xticklabels(xticks_label)
+
+    return ax
