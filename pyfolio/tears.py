@@ -87,13 +87,15 @@ def create_full_tear_sheet(returns, positions=None, transactions=None,
             2004-01-12    14492.6300     -14624.8700     27.1821
             2004-01-13    -13853.2800    13653.6400      -43.6375
     transactions : pd.DataFrame, optional
-        Daily transaction quantity (txn_shares) and dollar amount
-        (txn_volume).
+        Executed trade volumes and fill prices.
+        - One row per trade.
+        - Trades on different names that occur at the
+          same time will have identical indicies.
         - Example:
-            index         txn_volume      txn_shares
-            2004-01-09    99288.441805    6361
-            2004-01-12    1226.039520     102
-            2004-01-13    752.354630      73
+            index                  amount   price    symbol
+            2004-01-09 12:18:01    483      324.12   'AAPL'
+            2004-01-09 12:18:01    122      83.10    'MSFT'
+            2004-01-13 14:12:23    -75      340.43   'AAPL'
     gross_lev : pd.Series, optional
         The leverage of a strategy.
          - Time series of the sum of long and short exposure per share
@@ -429,7 +431,7 @@ def create_txn_tear_sheet(returns, positions, transactions,
         Daily net position values.
          - See full explanation in create_full_tear_sheet.
     transactions : pd.DataFrame
-         Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in create_full_tear_sheet.
     return_fig : boolean, optional
         If True, returns the figure that was plotted on.
@@ -568,7 +570,7 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
     returns : pd.Series
         Daily returns of the strategy, noncumulative.
          - See full explanation in create_full_tear_sheet.
-    benchmark_rets : pd.Series, optional
+    benchmark_rets : pd.Series or pd.DataFrame, optional
         Daily noncumulative returns of the benchmark.
          - This is in the same style as returns.
     live_start_date : datetime, optional
@@ -589,10 +591,19 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
             'Bayesian tear sheet requires setting of live_start_date'
         )
 
+    # start by benchmark is S&P500
+    fama_french = False
     if benchmark_rets is None:
-        benchmark_rets = utils.get_symbol_rets('SPY',
-                                               start=returns.index[0],
-                                               end=returns.index[-1])
+        benchmark_rets = pd.DataFrame(
+            utils.get_symbol_rets('SPY',
+                                  start=returns.index[0],
+                                  end=returns.index[-1]))
+    # unless user indicates otherwise
+    elif benchmark_rets == 'Fama-French':
+        fama_french = True
+        rolling_window = utils.APPROX_BDAYS_PER_MONTH * 6
+        benchmark_rets = timeseries.rolling_fama_french(
+            returns, rolling_window=rolling_window)
 
     live_start_date = utils.get_utc_timestamp(live_start_date)
     df_train = returns.loc[returns.index < live_start_date]
@@ -604,8 +615,9 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
     # track the total run time of the Bayesian tear sheet
     start_time = previous_time
 
-    trace_t = bayesian.run_model('t', df_train, returns_test=df_test,
-                                 samples=samples)
+    trace_t, ppc_t = bayesian.run_model('t', df_train,
+                                        returns_test=df_test,
+                                        samples=samples, ppc=True)
     previous_time = timer("T model", previous_time)
 
     # Compute BEST model
@@ -625,9 +637,7 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
 
     # Plot Bayesian cone
     ax_cone = plt.subplot(gs[row, :])
-    bayesian.plot_bayes_cone(df_train, df_test,
-                             trace=trace_t,
-                             ax=ax_cone)
+    bayesian.plot_bayes_cone(df_train, df_test, ppc_t, ax=ax_cone)
     previous_time = timer("plotting Bayesian cone", previous_time)
 
     # Plot BEST results
@@ -651,7 +661,7 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
     row += 1
     ax_ret_pred_day = plt.subplot(gs[row, 0])
     ax_ret_pred_week = plt.subplot(gs[row, 1])
-    day_pred = trace_t['returns_missing'][:, 0]
+    day_pred = ppc_t[:, 0]
     p5 = scipy.stats.scoreatpercentile(day_pred, 5)
     sns.distplot(day_pred,
                  ax=ax_ret_pred_day
@@ -667,7 +677,7 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
 
     # Plot Bayesian VaRs
     week_pred = (
-        np.cumprod(trace_t['returns_missing'][:, :5] + 1, 1) - 1)[:, -1]
+        np.cumprod(ppc_t[:, :5] + 1, 1) - 1)[:, -1]
     p5 = scipy.stats.scoreatpercentile(week_pred, 5)
     sns.distplot(week_pred,
                  ax=ax_ret_pred_week
@@ -693,10 +703,21 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
     row += 1
     ax_alpha = plt.subplot(gs[row, 0])
     ax_beta = plt.subplot(gs[row, 1])
-    sns.distplot((1 + trace_alpha_beta['alpha'][100:])**252 - 1, ax=ax_alpha)
+    if fama_french:
+        sns.distplot((1 + trace_alpha_beta['alpha'][100:])**252 - 1,
+                     ax=ax_alpha)
+        betas = ['SMB', 'HML', 'UMD']
+        nbeta = trace_alpha_beta['beta'].shape[1]
+        for i in range(nbeta):
+            sns.distplot(trace_alpha_beta['beta'][100:, i], ax=ax_beta,
+                         label=betas[i])
+        plt.legend()
+    else:
+        sns.distplot((1 + trace_alpha_beta['alpha'][100:])**252 - 1,
+                     ax=ax_alpha)
+        sns.distplot(trace_alpha_beta['beta'][100:], ax=ax_beta)
     ax_alpha.set_xlabel('Annual Alpha')
     ax_alpha.set_ylabel('Belief')
-    sns.distplot(trace_alpha_beta['beta'][100:], ax=ax_beta)
     ax_beta.set_xlabel('Beta')
     ax_beta.set_ylabel('Belief')
     previous_time = timer("plotting alpha beta model", previous_time)

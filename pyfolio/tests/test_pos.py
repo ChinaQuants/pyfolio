@@ -11,7 +11,6 @@ from pandas import (
 from pandas.util.testing import (assert_frame_equal)
 
 from numpy import (
-    absolute,
     arange,
     zeros_like,
 )
@@ -40,7 +39,7 @@ class PositionsTestCase(TestCase):
         result = get_percent_alloc(frame)
         expected_raw = zeros_like(raw_data)
         for idx, row in enumerate(raw_data):
-            expected_raw[idx] = row / absolute(row).sum()
+            expected_raw[idx] = row / row.sum()
 
         expected = DataFrame(
             expected_raw,
@@ -113,6 +112,6 @@ class PositionsTestCase(TestCase):
             assert_frame_equal(result_sector_exposure,
                                expected_sector_exposure)
             if warning_expected:
-                assert len(w) == 1
+                self.assertEqual(len(w), 1)
             else:
-                assert len(w) == 0
+                self.assertEqual(len(w), 0)

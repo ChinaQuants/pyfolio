@@ -22,7 +22,7 @@ AUTHOR = 'Quantopian Inc'
 AUTHOR_EMAIL = 'opensource@quantopian.com'
 URL = "https://github.com/quantopian/pyfolio"
 LICENSE = "Apache License, Version 2.0"
-VERSION = "0.3"
+VERSION = "0.3.1"
 
 classifiers = ['Development Status :: 4 - Beta',
                'Programming Language :: Python',
@@ -48,7 +48,9 @@ install_reqs = [
     'scikit-learn>=0.15.0',
     'scipy>=0.14.0',
     'seaborn>=0.6.0',
-    'statsmodels>=0.5.0']
+    'statsmodels>=0.5.0',
+    'pandas-datareader>=0.2',
+]
 
 extras_reqs = {
     'bayesian': ['pymc3']

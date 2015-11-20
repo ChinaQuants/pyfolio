@@ -503,11 +503,13 @@ def show_perf_stats(returns, factor_returns, live_start_date=None):
         perf_stats_all.loc['beta'] = perf_stats_all_ab[1]
         perf_stats_all.columns = ['All_History']
 
-        print('Out-of-Sample Months: ' + str(int(len(returns_live) / 21)))
+        print('Out-of-Sample Months: ' +
+              str(int(len(returns_live) / APPROX_BDAYS_PER_MONTH)))
     else:
         returns_backtest = returns
 
-    print('Backtest Months: ' + str(int(len(returns_backtest) / 21)))
+    print('Backtest Months: ' +
+          str(int(len(returns_backtest) / APPROX_BDAYS_PER_MONTH)))
 
     perf_stats = np.round(timeseries.perf_stats(
         returns_backtest, returns_style='arithmetic'), 2)
@@ -610,7 +612,8 @@ def plot_rolling_returns(
 
     if factor_returns is not None:
         timeseries.cum_returns(factor_returns[df_cum_rets.index], 1.0).plot(
-            lw=2, color='gray', label=factor_returns.name, alpha=0.60, ax=ax, **kwargs)
+            lw=2, color='gray', label=factor_returns.name, alpha=0.60,
+            ax=ax, **kwargs)
     if live_start_date is not None:
         live_start_date = utils.get_utc_timestamp(live_start_date)
 
@@ -1058,7 +1061,7 @@ def plot_turnover(returns, transactions, positions,
         Daily returns of the strategy, noncumulative.
          - See full explanation in tears.create_full_tear_sheet.
     transactions : pd.DataFrame
-        Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in tears.create_full_tear_sheet.
     positions : pd.DataFrame
         Daily net position values.
@@ -1118,7 +1121,7 @@ def plot_slippage_sweep(returns, transactions, positions,
         Timeseries of portfolio returns to be adjusted for various
         degrees of slippage.
     transactions : pd.DataFrame
-        Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in tears.create_full_tear_sheet.
     positions : pd.DataFrame
         Daily net position values.
@@ -1169,7 +1172,7 @@ def plot_slippage_sensitivity(returns, transactions, positions,
         Timeseries of portfolio returns to be adjusted for various
         degrees of slippage.
     transactions : pd.DataFrame
-        Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in tears.create_full_tear_sheet.
     positions : pd.DataFrame
         Daily net position values.
@@ -1214,7 +1217,7 @@ def plot_daily_turnover_hist(transactions, positions,
     Parameters
     ----------
     transactions : pd.DataFrame
-        Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in tears.create_full_tear_sheet.
     positions : pd.DataFrame
         Daily net position values.
@@ -1251,7 +1254,7 @@ def plot_daily_volume(returns, transactions, ax=None, **kwargs):
         Daily returns of the strategy, noncumulative.
          - See full explanation in tears.create_full_tear_sheet.
     transactions : pd.DataFrame
-        Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in tears.create_full_tear_sheet.
     ax : matplotlib.Axes, optional
         Axes upon which to plot.
@@ -1267,9 +1270,9 @@ def plot_daily_volume(returns, transactions, ax=None, **kwargs):
 
     if ax is None:
         ax = plt.gca()
-
-    transactions.txn_shares.plot(alpha=1.0, lw=0.5, ax=ax, **kwargs)
-    ax.axhline(transactions.txn_shares.mean(), color='steelblue',
+    daily_txn = txn.get_txn_vol(transactions)
+    daily_txn.txn_shares.plot(alpha=1.0, lw=0.5, ax=ax, **kwargs)
+    ax.axhline(daily_txn.txn_shares.mean(), color='steelblue',
                linestyle='--', lw=3, alpha=1.0)
     ax.set_title('Daily Trading Volume')
     df_cum_rets = timeseries.cum_returns(returns, starting_value=1)

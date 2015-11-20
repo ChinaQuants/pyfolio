@@ -26,18 +26,10 @@ from datetime import datetime
 
 import pandas as pd
 import numpy as np
-import pandas.io.data as web
+
+from pandas_datareader import data as web
+
 from pandas.tseries.offsets import BDay
-
-import zipfile
-
-from io import BytesIO, StringIO
-
-try:
-    # For Python 3.0 and later
-    from urllib.request import urlopen
-except:
-    from urllib2 import urlopen
 
 from . import pos
 from . import txn
@@ -245,39 +237,19 @@ def vectorize(func):
 
 
 def get_fama_french():
-    """Retrieve Fama-French factors from dartmouth host.
+    """Retrieve Fama-French factors via pandas-datareader
 
     Returns
     -------
     pandas.DataFrame
         Percent change of Fama-French factors
     """
-    umd_req = urlopen('http://mba.tuck.dartmouth.edu/page'
-                      's/faculty/ken.french/ftp/F-F_Momentum'
-                      '_Factor_daily_CSV.zip')
-    factors_req = urlopen('http://mba.tuck.dartmouth.edu/pag'
-                          'es/faculty/ken.french/ftp/F-F_Re'
-                          'search_Data_Factors_daily_CSV.zip')
-
-    umd_zip = zipfile.ZipFile(BytesIO(umd_req.read()), 'r')
-    factors_zip = zipfile.ZipFile(BytesIO(factors_req.read()),
-                                  'r')
-    umd_csv = umd_zip.read('F-F_Momentum_Factor_daily.CSV')
-    umd_csv = umd_csv.decode('utf-8')
-    umd_csv = umd_csv.split('\r\n\r\n')[2]\
-                     .replace('\r\n', '\n')
-    factors_csv = factors_zip.read('F-F_Research_Data_'
-                                   'Factors_daily.CSV')
-    factors_csv = factors_csv.decode('utf-8')
-    factors_csv = factors_csv.split('\r\n\r\n')[1]\
-                             .replace('\r\n', '\n')
-
-    factors = pd.DataFrame.from_csv(StringIO(factors_csv), sep=',')
-    umd = pd.DataFrame.from_csv(StringIO(umd_csv), sep=',')
-
-    five_factors = factors.join(umd).dropna(axis=0)
-    five_factors = five_factors / 100
-
+    research_factors = web.DataReader('F-F_Research_Data_Factors_daily',
+                                      'famafrench')[0]
+    momentum_factor = web.DataReader('F-F_Momentum_Factor_daily',
+                                     'famafrench')[0]
+    five_factors = research_factors.join(momentum_factor).dropna()
+    five_factors /= 100.
     five_factors.index = five_factors.index.tz_localize('utc')
 
     return five_factors
@@ -335,7 +307,7 @@ def extract_rets_pos_txn_from_zipline(backtest):
         Daily net position values.
          - See full explanation in tears.create_full_tear_sheet.
     transactions : pd.DataFrame
-        Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in tears.create_full_tear_sheet.
     gross_lev : pd.Series, optional
         The leverage of a strategy.
@@ -366,9 +338,9 @@ def extract_rets_pos_txn_from_zipline(backtest):
         raise ValueError("The backtest does not have any positions.")
     positions = pd.concat(raw_positions)
     positions = pos.extract_pos(positions, backtest.ending_cash)
-    transactions_frame = txn.make_transaction_frame(backtest.transactions)
-    transactions = txn.get_txn_vol(transactions_frame)
-    transactions.index = transactions.index.normalize().tz_localize('utc')
+    transactions = txn.make_transaction_frame(backtest.transactions)
+    if transactions.index.tzinfo is None:
+        transactions.index = transactions.index.tz_localize('utc')
 
     return returns, positions, transactions, gross_lev
 
