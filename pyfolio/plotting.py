@@ -16,11 +16,13 @@ from __future__ import division
 
 import pandas as pd
 import numpy as np
+import scipy as sp
 
 import seaborn as sns
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
+import matplotlib.lines as mlines
 
 from sklearn import preprocessing
 
@@ -1086,7 +1088,7 @@ def plot_turnover(returns, transactions, positions,
     y_axis_formatter = FuncFormatter(utils.one_dec_places)
     ax.yaxis.set_major_formatter(FuncFormatter(y_axis_formatter))
 
-    df_turnover = txn.get_turnover(transactions, positions)
+    df_turnover = txn.get_turnover(positions, transactions)
     df_turnover_by_month = df_turnover.resample("M")
     df_turnover.plot(color='steelblue', alpha=1.0, lw=0.5, ax=ax, **kwargs)
     df_turnover_by_month.plot(
@@ -1143,7 +1145,7 @@ def plot_slippage_sweep(returns, transactions, positions,
     if ax is None:
         ax = plt.gca()
 
-    turnover = txn.get_turnover(transactions, positions,
+    turnover = txn.get_turnover(positions, transactions,
                                 period=None, average=False)
 
     slippage_sweep = pd.DataFrame()
@@ -1191,7 +1193,7 @@ def plot_slippage_sensitivity(returns, transactions, positions,
     if ax is None:
         ax = plt.gca()
 
-    turnover = txn.get_turnover(transactions, positions,
+    turnover = txn.get_turnover(positions, transactions,
                                 period=None, average=False)
     avg_returns_given_slippage = pd.Series()
     for bps in range(1, 100):
@@ -1236,7 +1238,7 @@ def plot_daily_turnover_hist(transactions, positions,
 
     if ax is None:
         ax = plt.gca()
-    turnover = txn.get_turnover(transactions, positions, period=None)
+    turnover = txn.get_turnover(positions, transactions, period=None)
     sns.distplot(turnover, ax=ax, **kwargs)
     ax.set_title('Distribution of Daily Turnover Rates')
     ax.set_xlabel('Turnover Rate')
@@ -1400,5 +1402,116 @@ def plot_monthly_returns_timeseries(returns, ax=None, **kwargs):
     ax.axhline(0.0, color='darkgray', ls='-')
     ax.set_xticks(xticks_coord)
     ax.set_xticklabels(xticks_label)
+
+    return ax
+
+
+def plot_round_trip_life_times(round_trips, ax=None):
+    """
+    Plots timespans and directions of round trip trades.
+
+    Parameters
+    ----------
+    round_trips : pd.DataFrame
+        DataFrame with one row per round trip trade.
+        - See full explanation in round_trips.extract_round_trips
+    ax : matplotlib.Axes, optional
+        Axes upon which to plot.
+
+    Returns
+    -------
+    ax : matplotlib.Axes
+        The axes that were plotted on.
+    """
+    if ax is None:
+        ax = plt.subplot()
+
+    symbols = round_trips.symbol.unique()
+    symbol_idx = pd.Series(np.arange(len(symbols)), index=symbols)
+
+    for symbol, sym_round_trips in round_trips.groupby('symbol'):
+        for _, row in sym_round_trips.iterrows():
+            c = 'b' if row.long else 'r'
+            y_ix = symbol_idx[symbol]
+            ax.plot([row['open_dt'], row['close_dt']],
+                    [y_ix, y_ix], color=c)
+
+    ax.set_yticklabels(symbols)
+
+    red_line = mlines.Line2D([], [], color='r', label='Short')
+    blue_line = mlines.Line2D([], [], color='b', label='Long')
+    ax.legend(handles=[red_line, blue_line], loc=0)
+
+    return ax
+
+
+def show_profit_attribution(round_trips):
+    """
+    Prints the share of total PnL contributed by each
+    traded name.
+
+    Parameters
+    ----------
+    round_trips : pd.DataFrame
+        DataFrame with one row per round trip trade.
+        - See full explanation in round_trips.extract_round_trips
+    ax : matplotlib.Axes, optional
+        Axes upon which to plot.
+
+    Returns
+    -------
+    ax : matplotlib.Axes
+        The axes that were plotted on.
+    """
+
+    total_pnl = round_trips['pnl'].sum()
+    pct_profit_attribution = round_trips.groupby(
+        'symbol')['pnl'].sum() / total_pnl
+
+    print('\nProfitability (PnL / PnL total) per name:')
+    print(pct_profit_attribution.sort(inplace=False, ascending=False))
+
+
+def plot_prob_profit_trade(round_trips, ax=None):
+    """
+    Plots a probability distribution for the event of making
+    a profitable trade.
+
+    Parameters
+    ----------
+    round_trips : pd.DataFrame
+        DataFrame with one row per round trip trade.
+        - See full explanation in round_trips.extract_round_trips
+    ax : matplotlib.Axes, optional
+        Axes upon which to plot.
+
+    Returns
+    -------
+    ax : matplotlib.Axes
+        The axes that were plotted on.
+    """
+
+    x = np.linspace(0, 1., 500)
+
+    round_trips['profitable'] = round_trips.pnl > 0
+
+    dist = sp.stats.beta(round_trips.profitable.sum(),
+                         (~round_trips.profitable).sum())
+    y = dist.pdf(x)
+    lower_perc = dist.ppf(.025)
+    upper_perc = dist.ppf(.975)
+
+    lower_plot = dist.ppf(.001)
+    upper_plot = dist.ppf(.999)
+
+    if ax is None:
+        ax = plt.subplot()
+
+    ax.plot(x, y)
+    ax.axvline(lower_perc, color='0.5')
+    ax.axvline(upper_perc, color='0.5')
+
+    ax.set(xlabel='Probability making a profitable decision', ylabel='Belief',
+           xlim=(lower_plot, upper_plot), ylim=(0, y.max() + 1.))
 
     return ax
