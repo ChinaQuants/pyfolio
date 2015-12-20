@@ -14,7 +14,14 @@
 # limitations under the License.
 from __future__ import division
 
+from time import time
 import warnings
+
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import numpy as np
+import scipy.stats
+import pandas as pd
 
 from . import timeseries
 from . import utils
@@ -22,6 +29,7 @@ from . import pos
 from . import txn
 from . import round_trips
 from . import plotting
+from . import _seaborn as sns
 from .plotting import plotting_context
 
 try:
@@ -30,15 +38,6 @@ except ImportError:
     warnings.warn(
         "Could not import bayesian submodule due to missing pymc3 dependency.",
         ImportWarning)
-
-import numpy as np
-import scipy.stats
-import pandas as pd
-
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-import seaborn as sns
-from time import time
 
 
 def timer(msg_body, previous_time):
@@ -50,14 +49,19 @@ def timer(msg_body, previous_time):
     return current_time
 
 
-def create_full_tear_sheet(returns, positions=None, transactions=None,
+def create_full_tear_sheet(returns,
+                           positions=None,
+                           transactions=None,
                            benchmark_rets=None,
                            gross_lev=None,
                            slippage=None,
-                           live_start_date=None, bayesian=False,
-                           hide_positions=False,
+                           live_start_date=None,
                            sector_mappings=None,
-                           cone_std=(1.0, 1.5, 2.0), set_context=True):
+                           bayesian=False,
+                           round_trips=False,
+                           hide_positions=False,
+                           cone_std=(1.0, 1.5, 2.0),
+                           set_context=True):
     """
     Generate a number of tear sheets that are useful
     for analyzing a strategy's performance.
@@ -115,11 +119,13 @@ def create_full_tear_sheet(returns, positions=None, transactions=None,
         - See txn.adjust_returns_for_slippage for more details.
     live_start_date : datetime, optional
         The point in time when the strategy began live trading,
-        after its backtest period.
+        after its backtest period. This datetime should be normalized.
     hide_positions : bool, optional
         If True, will not output any symbol names.
     bayesian: boolean, optional
         If True, causes the generation of a Bayesian tear sheet.
+    round_trips: boolean, optional
+        If True, causes the generation of a round trip tear sheet.
     cone_std : float, or tuple, optional
         If float, The standard deviation to use for the cone plots.
         If tuple, Tuple of standard deviation values to use for the cone plots
@@ -167,9 +173,11 @@ def create_full_tear_sheet(returns, positions=None, transactions=None,
             create_txn_tear_sheet(returns, positions, transactions,
                                   unadjusted_returns=unadjusted_returns,
                                   set_context=set_context)
-
-            create_round_trip_tear_sheet(transactions, positions,
-                                         sector_mappings=sector_mappings)
+            if round_trips:
+                create_round_trip_tear_sheet(
+                    positions=positions,
+                    transactions=transactions,
+                    sector_mappings=sector_mappings)
 
     if bayesian:
         create_bayesian_tear_sheet(returns,
@@ -266,6 +274,8 @@ def create_returns_tear_sheet(returns, live_start_date=None,
         live_start_date=live_start_date,
         cone_std=cone_std,
         ax=ax_rolling_returns)
+    ax_rolling_returns.set_title(
+        'Cumulative Returns')
 
     plotting.plot_rolling_returns(
         returns,
@@ -273,6 +283,7 @@ def create_returns_tear_sheet(returns, live_start_date=None,
         live_start_date=live_start_date,
         cone_std=None,
         volatility_match=True,
+        legend_loc=None,
         ax=ax_rolling_returns_vol_match)
     ax_rolling_returns_vol_match.set_title(
         'Cumulative returns volatility matched to benchmark.')
@@ -334,6 +345,9 @@ def create_returns_tear_sheet(returns, live_start_date=None,
             title='Similarity without variance\nand mean normalization',
             ax=ax_daily_similarity_no_var_no_mean)
 
+    for ax in fig.axes:
+        plt.setp(ax.get_xticklabels(), visible=True)
+
     plt.show()
     if return_fig:
         return fig
@@ -379,14 +393,15 @@ def create_position_tear_sheet(returns, positions, gross_lev=None,
 
     if hide_positions:
         show_and_plot_top_pos = 0
-    vertical_sections = 5 if sector_mappings is not None else 4
+    vertical_sections = 6 if sector_mappings is not None else 5
 
     fig = plt.figure(figsize=(14, vertical_sections * 6))
     gs = gridspec.GridSpec(vertical_sections, 3, wspace=0.5, hspace=0.5)
     ax_gross_leverage = plt.subplot(gs[0, :])
     ax_exposures = plt.subplot(gs[1, :], sharex=ax_gross_leverage)
     ax_top_positions = plt.subplot(gs[2, :], sharex=ax_gross_leverage)
-    ax_holdings = plt.subplot(gs[3, :], sharex=ax_gross_leverage)
+    ax_max_median_pos = plt.subplot(gs[3, :], sharex=ax_gross_leverage)
+    ax_holdings = plt.subplot(gs[4, :], sharex=ax_gross_leverage)
 
     positions_alloc = pos.get_percent_alloc(positions)
 
@@ -402,6 +417,9 @@ def create_position_tear_sheet(returns, positions, gross_lev=None,
         hide_positions=hide_positions,
         ax=ax_top_positions)
 
+    plotting.plot_max_median_position_concentration(positions,
+                                                    ax=ax_max_median_pos)
+
     plotting.plot_holdings(returns, positions_alloc, ax=ax_holdings)
 
     if sector_mappings is not None:
@@ -409,9 +427,11 @@ def create_position_tear_sheet(returns, positions, gross_lev=None,
         if len(sector_exposures.columns) > 1:
             sector_alloc = pos.get_percent_alloc(sector_exposures)
             sector_alloc = sector_alloc.drop('cash', axis='columns')
-            ax_sector_alloc = plt.subplot(gs[4, :], sharex=ax_gross_leverage)
+            ax_sector_alloc = plt.subplot(gs[5, :], sharex=ax_gross_leverage)
             plotting.plot_sector_allocations(returns, sector_alloc,
                                              ax=ax_sector_alloc)
+    for ax in fig.axes:
+        plt.setp(ax.get_xticklabels(), visible=True)
 
     plt.show()
     if return_fig:
@@ -437,6 +457,11 @@ def create_txn_tear_sheet(returns, positions, transactions,
     transactions : pd.DataFrame
         Prices and amounts of executed trades. One row per trade.
          - See full explanation in create_full_tear_sheet.
+    unadjusted_returns : pd.Series, optional
+        Daily unadjusted returns of the strategy, noncumulative.
+        Will plot additional swippage sweep analysis.
+         - See pyfolio.plotting.plot_swippage_sleep and
+           pyfolio.plotting.plot_slippage_sensitivity
     return_fig : boolean, optional
         If True, returns the figure that was plotted on.
     """
@@ -475,6 +500,8 @@ def create_txn_tear_sheet(returns, positions, transactions,
                                            positions,
                                            ax=ax_slippage_sensitivity
                                            )
+    for ax in fig.axes:
+        plt.setp(ax.get_xticklabels(), visible=True)
 
     plt.show()
     if return_fig:
@@ -697,7 +724,8 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
                                   start=returns.index[0],
                                   end=returns.index[-1]))
     # unless user indicates otherwise
-    elif benchmark_rets == 'Fama-French':
+    elif isinstance(benchmark_rets, str) and (benchmark_rets ==
+                                              'Fama-French'):
         fama_french = True
         rolling_window = utils.APPROX_BDAYS_PER_MONTH * 6
         benchmark_rets = timeseries.rolling_fama_french(
@@ -822,14 +850,14 @@ def create_bayesian_tear_sheet(returns, benchmark_rets=None,
 
     if stoch_vol:
         # run stochastic volatility model
+        returns_cutoff = 400
         print(
             "\nRunning stochastic volatility model on "
-            "most recent 400 days of returns."
+            "most recent {} days of returns.".format(returns_cutoff)
         )
-        returns_cutoff = 400
         if df_train.size > returns_cutoff:
             df_train_truncated = df_train[-returns_cutoff:]
-        trace_stoch_vol = bayesian.model_stoch_vol(df_train_truncated)
+        _, trace_stoch_vol = bayesian.model_stoch_vol(df_train_truncated)
         previous_time = timer(
             "running stochastic volatility model", previous_time)
 

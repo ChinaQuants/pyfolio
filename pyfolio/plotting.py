@@ -18,7 +18,6 @@ import pandas as pd
 import numpy as np
 import scipy as sp
 
-import seaborn as sns
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
@@ -29,6 +28,7 @@ from sklearn import preprocessing
 from . import utils
 from . import timeseries
 from . import pos
+from . import _seaborn as sns
 from . import txn
 
 from .utils import APPROX_BDAYS_PER_MONTH
@@ -135,12 +135,12 @@ def plot_rolling_fama_french(
     if ax is None:
         ax = plt.gca()
 
-    num_months_str = '%.0f' % (rolling_window / APPROX_BDAYS_PER_MONTH)
-
     ax.set_title(
-        "Rolling Fama-French Single Factor Betas (" +
-        num_months_str +
-        '-month)')
+        "Rolling Fama-French Single Factor Betas (%.0f-month)" % (
+            rolling_window / APPROX_BDAYS_PER_MONTH
+        )
+    )
+
     ax.set_ylabel('beta')
 
     rolling_beta = timeseries.rolling_fama_french(
@@ -419,7 +419,7 @@ def plot_drawdown_periods(returns, top=10, ax=None, **kwargs):
 
     ax.set_title('Top %i Drawdown Periods' % top)
     ax.set_ylabel('Cumulative returns')
-    ax.legend(['Portfolio'], 'upper left')
+    ax.legend(['Portfolio'], loc='upper left')
     ax.set_xlabel('')
     return ax
 
@@ -490,19 +490,13 @@ def show_perf_stats(returns, factor_returns, live_start_date=None):
         returns_live = returns[returns.index > live_start_date]
 
         perf_stats_live = np.round(timeseries.perf_stats(
-            returns_live, returns_style='arithmetic'), 2)
-        perf_stats_live_ab = np.round(
-            timeseries.calc_alpha_beta(returns_live, factor_returns), 2)
-        perf_stats_live.loc['alpha'] = perf_stats_live_ab[0]
-        perf_stats_live.loc['beta'] = perf_stats_live_ab[1]
+            returns_live,
+            factor_returns=factor_returns), 2)
         perf_stats_live.columns = ['Out_of_Sample']
 
         perf_stats_all = np.round(timeseries.perf_stats(
-            returns, returns_style='arithmetic'), 2)
-        perf_stats_all_ab = np.round(
-            timeseries.calc_alpha_beta(returns, factor_returns), 2)
-        perf_stats_all.loc['alpha'] = perf_stats_all_ab[0]
-        perf_stats_all.loc['beta'] = perf_stats_all_ab[1]
+            returns,
+            factor_returns=factor_returns), 2)
         perf_stats_all.columns = ['All_History']
 
         print('Out-of-Sample Months: ' +
@@ -514,11 +508,8 @@ def show_perf_stats(returns, factor_returns, live_start_date=None):
           str(int(len(returns_backtest) / APPROX_BDAYS_PER_MONTH)))
 
     perf_stats = np.round(timeseries.perf_stats(
-        returns_backtest, returns_style='arithmetic'), 2)
-    perf_stats_ab = np.round(
-        timeseries.calc_alpha_beta(returns_backtest, factor_returns), 2)
-    perf_stats.loc['alpha'] = perf_stats_ab[0]
-    perf_stats.loc['beta'] = perf_stats_ab[1]
+        returns_backtest,
+        factor_returns=factor_returns), 2)
     perf_stats.columns = ['Backtest']
 
     if live_start_date is not None:
@@ -530,21 +521,22 @@ def show_perf_stats(returns, factor_returns, live_start_date=None):
     print(perf_stats)
 
 
-def plot_rolling_returns(
-        returns,
-        factor_returns=None,
-        live_start_date=None,
-        cone_std=None,
-        legend_loc='best',
-        volatility_match=False,
-        ax=None, **kwargs):
-    """Plots cumulative rolling returns versus some benchmarks'.
+def plot_rolling_returns(returns,
+                         factor_returns=None,
+                         live_start_date=None,
+                         cone_std=None,
+                         legend_loc='best',
+                         volatility_match=False,
+                         cone_function=timeseries.forecast_cone_bootstrap,
+                         ax=None, **kwargs):
+    """
+    Plots cumulative rolling returns versus some benchmarks'.
 
     Backtest returns are in green, and out-of-sample (live trading)
     returns are in red.
 
-    Additionally, a linear cone plot may be added to the out-of-sample
-    returns region.
+    Additionally, a non-parametric cone plot may be added to the
+    out-of-sample returns region.
 
     Parameters
     ----------
@@ -555,19 +547,26 @@ def plot_rolling_returns(
         Daily noncumulative returns of a risk factor.
          - This is in the same style as returns.
     live_start_date : datetime, optional
-        The point in time when the strategy began live trading, after
-        its backtest period.
+        The date when the strategy began live trading, after
+        its backtest period. This date should be normalized.
     cone_std : float, or tuple, optional
         If float, The standard deviation to use for the cone plots.
         If tuple, Tuple of standard deviation values to use for the cone plots
-         - The cone is a normal distribution with this standard deviation
-             centered around a linear regression.
+         - See timeseries.forecast_cone_bounds for more details.
     legend_loc : matplotlib.loc, optional
         The location of the legend on the plot.
     volatility_match : bool, optional
         Whether to normalize the volatility of the returns to those of the
         benchmark returns. This helps compare strategies with different
         volatilities. Requires passing of benchmark_rets.
+    cone_function : function, optional
+        Function to use when generating forecast probability cone.
+        The function signiture must follow the form:
+        def cone(in_sample_returns (pd.Series),
+                 days_to_project_forward (int),
+                 cone_std= (float, or tuple),
+                 starting_value= (int, or float))
+        See timeseries.forecast_cone_bootstrap for an example.
     ax : matplotlib.Axes, optional
         Axes upon which to plot.
     **kwargs, optional
@@ -579,26 +578,11 @@ def plot_rolling_returns(
         The axes that were plotted on.
 
 """
-    def draw_cone(returns, num_stdev, live_start_date, ax):
-        cone_df = timeseries.cone_rolling(
-            returns,
-            num_stdev=num_stdev,
-            cone_fit_end_date=live_start_date)
-
-        cone_in_sample = cone_df[cone_df.index < live_start_date]
-        cone_out_of_sample = cone_df[cone_df.index > live_start_date]
-        cone_out_of_sample = cone_out_of_sample[
-            cone_out_of_sample.index < returns.index[-1]]
-
-        ax.fill_between(cone_out_of_sample.index,
-                        cone_out_of_sample.sd_down,
-                        cone_out_of_sample.sd_up,
-                        color='steelblue', alpha=0.25)
-
-        return cone_in_sample, cone_out_of_sample
-
     if ax is None:
         ax = plt.gca()
+
+    ax.set_ylabel('Cumulative returns')
+    ax.set_xlabel('')
 
     if volatility_match and factor_returns is None:
         raise ValueError('volatility_match requires passing of'
@@ -607,65 +591,55 @@ def plot_rolling_returns(
         bmark_vol = factor_returns.loc[returns.index].std()
         returns = (returns / returns.std()) * bmark_vol
 
-    df_cum_rets = timeseries.cum_returns(returns, 1.0)
+    cum_rets = timeseries.cum_returns(returns, 1.0)
 
     y_axis_formatter = FuncFormatter(utils.one_dec_places)
     ax.yaxis.set_major_formatter(FuncFormatter(y_axis_formatter))
 
     if factor_returns is not None:
-        timeseries.cum_returns(factor_returns[df_cum_rets.index], 1.0).plot(
-            lw=2, color='gray', label=factor_returns.name, alpha=0.60,
-            ax=ax, **kwargs)
+        cum_factor_returns = timeseries.cum_returns(
+            factor_returns[cum_rets.index], 1.0)
+        cum_factor_returns.plot(lw=2, color='gray',
+                                label=factor_returns.name, alpha=0.60,
+                                ax=ax, **kwargs)
+
     if live_start_date is not None:
         live_start_date = utils.get_utc_timestamp(live_start_date)
-
-    if (live_start_date is None) or (df_cum_rets.index[-1] <=
-                                     live_start_date):
-        df_cum_rets.plot(lw=3, color='forestgreen', alpha=0.6,
-                         label='Backtest', ax=ax, **kwargs)
+        is_cum_returns = cum_rets.loc[cum_rets.index < live_start_date]
+        oos_cum_returns = cum_rets.loc[cum_rets.index >= live_start_date]
     else:
-        df_cum_rets[:live_start_date].plot(
-            lw=3, color='forestgreen', alpha=0.6,
-            label='Backtest', ax=ax, **kwargs)
-        df_cum_rets[live_start_date:].plot(
-            lw=4, color='red', alpha=0.6,
-            label='Live', ax=ax, **kwargs)
+        is_cum_returns = cum_rets
+        oos_cum_returns = pd.Series([])
+
+    is_cum_returns.plot(lw=3, color='forestgreen', alpha=0.6,
+                        label='Backtest', ax=ax, **kwargs)
+
+    if len(oos_cum_returns) > 0:
+        oos_cum_returns.plot(lw=4, color='red', alpha=0.6,
+                             label='Live', ax=ax, **kwargs)
 
         if cone_std is not None:
-            # check to see if cone_std was passed as a single value and,
-            # if so, just convert to list automatically
-            if isinstance(cone_std, float):
+            if isinstance(cone_std, (float, int)):
                 cone_std = [cone_std]
 
-            for cone_i in cone_std:
-                cone_in_sample, cone_out_of_sample = draw_cone(
-                    returns,
-                    cone_i,
-                    live_start_date,
-                    ax)
+            is_returns = returns.loc[returns.index < live_start_date]
+            cone_bounds = cone_function(
+                is_returns,
+                len(oos_cum_returns),
+                cone_std=cone_std,
+                starting_value=is_cum_returns[-1])
 
-            cone_in_sample['line'].plot(
-                ax=ax,
-                ls='--',
-                label='Backtest trend',
-                lw=2,
-                color='forestgreen',
-                alpha=0.7,
-                **kwargs)
-            cone_out_of_sample['line'].plot(
-                ax=ax,
-                ls='--',
-                label='Predicted trend',
-                lw=2,
-                color='red',
-                alpha=0.7,
-                **kwargs)
+            cone_bounds = cone_bounds.set_index(oos_cum_returns.index)
 
+            for std in cone_std:
+                ax.fill_between(cone_bounds.index,
+                                cone_bounds[float(std)],
+                                cone_bounds[float(-std)],
+                                color='steelblue', alpha=0.5)
+
+    if legend_loc is not None:
+        ax.legend(loc=legend_loc)
     ax.axhline(1.0, linestyle='--', color='black', lw=2)
-    ax.set_ylabel('Cumulative returns')
-    ax.set_title('Cumulative Returns')
-    ax.legend(loc=legend_loc)
-    ax.set_xlabel('')
 
     return ax
 
@@ -702,7 +676,7 @@ def plot_rolling_beta(returns, factor_returns, legend_loc='best',
     y_axis_formatter = FuncFormatter(utils.one_dec_places)
     ax.yaxis.set_major_formatter(FuncFormatter(y_axis_formatter))
 
-    ax.set_title("Rolling Portfolio Beta to " + factor_returns.name)
+    ax.set_title("Rolling Portfolio Beta to " + str(factor_returns.name))
     ax.set_ylabel('Beta')
     rb_1 = timeseries.rolling_beta(
         returns, factor_returns, rolling_window=APPROX_BDAYS_PER_MONTH * 6)
@@ -943,6 +917,37 @@ def show_and_plot_top_positions(returns, positions_alloc,
             ax.legend_.remove()
 
         return ax
+
+
+def plot_max_median_position_concentration(positions, ax=None, **kwargs):
+    """
+    Plots the max and median of long and short position concentrations
+    over the time.
+
+    Parameters
+    ----------
+    positions : pd.DataFrame
+        The positions that the strategy takes over time.
+    ax : matplotlib.Axes, optional
+        Axes upon which to plot.
+
+    Returns
+    -------
+    ax : matplotlib.Axes
+        The axes that were plotted on.
+    """
+    if ax is None:
+        ax = plt.gcf()
+
+    alloc_summary = pos.get_max_median_position_concentration(positions)
+    colors = ['mediumblue', 'steelblue', 'tomato', 'firebrick']
+    alloc_summary.plot(linewidth=1, color=colors, alpha=0.6, ax=ax)
+
+    ax.legend(loc='center left')
+    ax.set_ylabel('Exposure')
+    ax.set_title('Long/Short Max and Median Position Concentration')
+
+    return ax
 
 
 def plot_sector_allocations(returns, sector_alloc, ax=None, **kwargs):
@@ -1199,7 +1204,7 @@ def plot_slippage_sensitivity(returns, transactions, positions,
     for bps in range(1, 100):
         adj_returns = txn.adjust_returns_for_slippage(returns, turnover, bps)
         avg_returns = timeseries.annual_return(
-            adj_returns, style='calendar')
+            adj_returns)
         avg_returns_given_slippage.loc[bps] = avg_returns
 
     avg_returns_given_slippage.plot(alpha=1.0, lw=2, ax=ax)
